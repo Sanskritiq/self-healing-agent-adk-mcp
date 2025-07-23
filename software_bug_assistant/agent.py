@@ -15,12 +15,17 @@
 from google.adk.agents import Agent
 
 from .prompt import agent_instruction
-from .tools.tools import get_current_date, langchain_tool, mcp_tools, search_tool, toolbox_tools
+from .tools.tools import get_current_date, analysis_agent_tool , jira_agent_tool, code_fixer_agent_tool 
 
 
 root_agent = Agent(
     model="gemini-2.5-flash",
-    name="software_assistant",
+    name="self_healing_agent",
     instruction=agent_instruction,
-    tools=[get_current_date, search_tool, langchain_tool, *toolbox_tools, mcp_tools],
+    tools=[
+        analysis_agent_tool,
+        jira_agent_tool, 
+        code_fixer_agent_tool,
+        get_current_date
+    ],
 )
