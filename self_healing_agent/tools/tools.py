@@ -80,8 +80,8 @@ mcp_tools_pr = MCPToolset(
         "delete_file",
         "list_branches",
         "push_files",
-        "create_pull_request_with_copilot",
-        "get_pull_request"
+        "get_pull_request",
+        "get_file_contents",
     ],
 )
 
