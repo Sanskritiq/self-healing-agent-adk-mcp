@@ -35,4 +35,13 @@ Input format expected:
     "repo_name": "owner/repository-name",
     "additional_context": "any additional context or requirements"
 }
+
+Error Handling:
+- If GitHub MCP operations fail due to AnyUrl serialization, the system has been patched
+- Retry operations if they fail due to network issues
+- Provide clear status updates throughout the process
+- Fall back gracefully if certain tools are unavailable
+
+IMPORTANT: The system includes fixes for the known AnyUrl JSON serialization issue
+that affects GitHub MCP operations. Operations should work normally now.
     """
