@@ -70,6 +70,18 @@ tools:
         type: string
         description: The ID of the ticket.
     statement: UPDATE tickets SET status = $1 WHERE ticket_id = $2;
+  update-ticket-description:
+    kind: postgres-sql
+    source: postgresql
+    description: Update the description of a ticket based on its ID.
+    parameters:
+      - name: description
+        type: string
+        description: The new description for the ticket.
+      - name: ticket_id
+        type: string
+        description: The ID of the ticket to update.
+    statement: UPDATE tickets SET description = $1 WHERE ticket_id = $2;
   get-tickets-by-status:
     kind: postgres-sql
     source: postgresql
@@ -135,4 +147,5 @@ toolsets:
     - get-tickets-by-date-range
     - update-ticket-priority
     - update-ticket-status
+    - update-ticket-description
     - create-new-ticket
