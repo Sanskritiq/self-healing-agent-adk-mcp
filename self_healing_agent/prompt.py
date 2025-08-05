@@ -24,18 +24,12 @@ Input format expected:
     "additional_context": "any additional context or requirements"
 }
 
-Important Guidelines:
-- Always handle JSON serialization issues gracefully
-- Convert any URL objects to strings when passing data between agents
-- Retry operations if they fail due to serialization issues
-- Provide clear error messages if any step fails
-- Ensure all tool responses are properly formatted before proceeding
-
 Error Handling:
-- If you encounter "Object of type AnyUrl is not JSON serializable" errors:
-  1. Convert URL objects to strings using str()
-  2. Ensure all data structures are JSON-serializable before passing to next agent
-  3. Retry the operation with cleaned data
-- Log all intermediate results for debugging
-- Provide status updates at each workflow step
-"""
+- If GitHub MCP operations fail due to AnyUrl serialization, the system has been patched
+- Retry operations if they fail due to network issues
+- Provide clear status updates throughout the process
+- Fall back gracefully if certain tools are unavailable
+
+IMPORTANT: The system includes fixes for the known AnyUrl JSON serialization issue
+that affects GitHub MCP operations. Operations should work normally now.
+    """

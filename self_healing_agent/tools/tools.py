@@ -1,7 +1,8 @@
 from datetime import datetime
 import os
 import json
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, List, Union
 
 from google.adk.agents import Agent
 from google.adk.tools import google_search
@@ -18,75 +19,77 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# ----- Utility Functions -----
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 def get_current_date() -> dict:
     """Get the current date in the format YYYY-MM-DD"""
     return {"current_date": datetime.now().strftime("%Y-%m-%d")}
 
-def serialize_tool_response(response: Any) -> Dict[str, Any]:
+def convert_anyurl_to_string(obj: Any) -> Any:
     """
-    Convert tool responses to JSON-serializable format.
-    Handles AnyUrl and other non-serializable objects.
+    Recursively convert AnyUrl objects to strings to fix JSON serialization issues.
+    This is a workaround for the AnyUrl serialization bug in the ADK.
     """
-    if isinstance(response, dict):
-        return {k: serialize_tool_response(v) for k, v in response.items()}
-    elif isinstance(response, list):
-        return [serialize_tool_response(item) for item in response]
-    elif isinstance(response, AnyUrl):
-        return str(response)
-    elif hasattr(response, '__dict__'):
-        # For objects with attributes, convert to dict
-        result = {}
-        for key, value in response.__dict__.items():
-            if not key.startswith('_'):  # Skip private attributes
-                result[key] = serialize_tool_response(value)
-        return result
-    elif hasattr(response, 'dict'):
-        # For Pydantic models
-        try:
-            return serialize_tool_response(response.dict())
-        except:
-            return str(response)
-    else:
-        # For primitive types and other serializable objects
-        try:
-            json.dumps(response)  # Test if it's serializable
-            return response
-        except (TypeError, ValueError):
-            return str(response)
+    if isinstance(obj, dict):
+        return {k: convert_anyurl_to_string(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_anyurl_to_string(i) for i in obj]
+    elif hasattr(obj, "__str__") and type(obj).__name__ == "AnyUrl":
+        return str(obj)
+    return obj
 
-# ----- Wrapper Classes for Tools -----
-class SerializableMCPToolset:
-    """Wrapper for MCPToolset that ensures JSON serializable responses"""
-    
-    def __init__(self, mcp_toolset: MCPToolset):
-        self.mcp_toolset = mcp_toolset
-    
-    def __getattr__(self, name):
-        """Delegate attribute access to the wrapped toolset"""
-        attr = getattr(self.mcp_toolset, name)
-        if callable(attr):
-            def wrapper(*args, **kwargs):
-                result = attr(*args, **kwargs)
-                return serialize_tool_response(result)
-            return wrapper
-        return attr
+def safe_json_dumps(data: Any) -> str:
+    """
+    Safely serialize data to JSON, handling AnyUrl objects.
+    """
+    try:
+        converted_data = convert_anyurl_to_string(data)
+        return json.dumps(converted_data)
+    except Exception as e:
+        logger.error(f"Error serializing data: {e}")
+        # Fallback to string representation
+        return str(data)
 
-class SerializableLangchainTool:
-    """Wrapper for LangchainTool that ensures JSON serializable responses"""
+# ----- Monkey Patch for AnyUrl Issue -----
+# This patches the issue at runtime without modifying the installed package
+
+try:
+    import google.genai._api_client as api_client
     
-    def __init__(self, langchain_tool: LangchainTool):
-        self.langchain_tool = langchain_tool
-    
-    def __getattr__(self, name):
-        """Delegate attribute access to the wrapped tool"""
-        attr = getattr(self.langchain_tool, name)
-        if callable(attr):
-            def wrapper(*args, **kwargs):
-                result = attr(*args, **kwargs)
-                return serialize_tool_response(result)
-            return wrapper
-        return attr
+    # Store the original method
+    original_method = None
+    if hasattr(api_client, 'HttpRequest'):
+        # Find the method that handles JSON serialization
+        # This is a defensive approach since the internal structure might change
+        logger.info("Applying AnyUrl serialization fix...")
+        
+        # Create a custom JSON encoder that handles AnyUrl
+        class SafeJSONEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if hasattr(obj, "__str__") and type(obj).__name__ == "AnyUrl":
+                    return str(obj)
+                return super().default(obj)
+        
+        # Monkey patch json.dumps to use our safe encoder
+        original_json_dumps = json.dumps
+        def patched_json_dumps(obj, **kwargs):
+            try:
+                # Try with our safe encoder first
+                kwargs['cls'] = SafeJSONEncoder
+                return original_json_dumps(obj, **kwargs)
+            except TypeError:
+                # Fallback to converting the object first
+                converted_obj = convert_anyurl_to_string(obj)
+                return original_json_dumps(converted_obj, **kwargs)
+        
+        # Apply the patch
+        json.dumps = patched_json_dumps
+        logger.info("AnyUrl serialization fix applied successfully")
+        
+except ImportError as e:
+    logger.warning(f"Could not apply AnyUrl fix: {e}. Manual fix may be required.")
 
 # ----- Initialize Base Tools -----
 
@@ -116,17 +119,22 @@ TOOLBOX_URL = os.getenv("MCP_TOOLBOX_URL", "http://127.0.0.1:5000")
 try:
     toolbox = ToolboxSyncClient(TOOLBOX_URL)
     toolbox_tools = toolbox.load_toolset("tickets_toolset")
+    logger.info("Toolbox JIRA tools loaded successfully")
 except Exception as e:
-    print(f"Warning: Could not initialize Toolbox tools: {e}")
+    logger.error(f"Failed to load toolbox tools: {e}")
     toolbox_tools = []
 
 # MCP Tools for GitHub operations
 GITHUB_TOKEN = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
+if not GITHUB_TOKEN:
+    logger.error("GITHUB_PERSONAL_ACCESS_TOKEN not found in environment variables")
+    raise ValueError("GitHub token is required")
+
 github_headers = {"Authorization": f"Bearer {GITHUB_TOKEN}"}
 
-# Analysis tools (read-only) with serialization wrapper
+# Analysis tools (read-only)
 try:
-    mcp_tools_analyse_raw = MCPToolset(
+    mcp_tools_analyse = MCPToolset(
         connection_params=StreamableHTTPConnectionParams(
             url="https://api.githubcopilot.com/mcp/",
             headers=github_headers,
@@ -142,14 +150,14 @@ try:
             "get_pull_request",
         ],
     )
-    mcp_tools_analyse = SerializableMCPToolset(mcp_tools_analyse_raw)
+    logger.info("GitHub analysis tools initialized successfully")
 except Exception as e:
-    print(f"Warning: Could not initialize MCP analysis tools: {e}")
+    logger.error(f"Failed to initialize GitHub analysis tools: {e}")
     mcp_tools_analyse = None
 
-# PR and code modification tools with serialization wrapper
+# PR and code modification tools
 try:
-    mcp_tools_pr_raw = MCPToolset(
+    mcp_tools_pr = MCPToolset(
         connection_params=StreamableHTTPConnectionParams(
             url="https://api.githubcopilot.com/mcp/",
             headers=github_headers,
@@ -162,13 +170,13 @@ try:
             "delete_file",
             "list_branches",
             "push_files",
-            "create_pull_request_with_copilot",
-            "get_pull_request"
+            "get_pull_request",
+            "get_file_contents",
         ],
     )
-    mcp_tools_pr = SerializableMCPToolset(mcp_tools_pr_raw)
+    logger.info("GitHub PR tools initialized successfully")
 except Exception as e:
-    print(f"Warning: Could not initialize MCP PR tools: {e}")
+    logger.error(f"Failed to initialize GitHub PR tools: {e}")
     mcp_tools_pr = None
 
 # ----- Specialized Agent Tools -----
@@ -203,8 +211,10 @@ analysis_agent = Agent(
     - Look up solutions on StackOverflow
     - Research best practices
     
-    Always provide detailed, actionable analysis in JSON-serializable format.
-    When working with URLs or complex objects, ensure they are converted to strings.
+    IMPORTANT: When using GitHub MCP tools, be aware of potential AnyUrl serialization issues.
+    If you encounter JSON serialization errors, the system has been patched to handle them.
+    
+    Always provide detailed, actionable analysis.
     """,
     tools=analysis_tools,
 )
@@ -237,7 +247,7 @@ jira_agent = Agent(
     - Update status appropriately
     - Add relevant comments about progress
     
-    Always ensure responses are in JSON-serializable format.
+    Handle errors gracefully and provide meaningful feedback if JIRA operations fail.
     """,
     tools=jira_tools,
 )
@@ -278,8 +288,8 @@ code_fixer_agent = Agent(
       - Testing notes
     - Link to related issues/tickets
     
-    Always ensure responses are in JSON-serializable format.
-    Convert any URL objects to strings before returning.
+    IMPORTANT: The system has been patched to handle AnyUrl serialization issues.
+    If you encounter any JSON serialization errors with GitHub operations, they should be automatically handled.
     """,
     tools=fixer_tools,
 )
