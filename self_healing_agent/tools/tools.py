@@ -12,7 +12,6 @@ from google.adk.tools.mcp_tool import MCPToolset, StreamableHTTPConnectionParams
 from langchain_community.tools import StackExchangeTool
 from langchain_community.utilities import StackExchangeAPIWrapper
 from toolbox_core import ToolboxSyncClient
-from pydantic import AnyUrl
 
 from dotenv import load_dotenv
 
@@ -23,6 +22,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ----- Utility Function -----
 def get_current_date() -> dict:
     """Get the current date in the format YYYY-MM-DD"""
     return {"current_date": datetime.now().strftime("%Y-%m-%d")}
@@ -100,19 +100,14 @@ search_agent = Agent(
     instruction="""
     You're a specialist in Google Search. Focus on finding relevant technical documentation,
     bug reports, and solutions for programming issues. Provide concise, actionable information.
-    Always return results in a JSON-serializable format.
     """,
     tools=[google_search],
 )
 search_tool = AgentTool(search_agent)
 
 # StackOverflow tool for technical Q&A
-try:
-    stack_exchange_tool = StackExchangeTool(api_wrapper=StackExchangeAPIWrapper())
-    stackoverflow_tool = SerializableLangchainTool(LangchainTool(stack_exchange_tool))
-except Exception as e:
-    print(f"Warning: Could not initialize StackOverflow tool: {e}")
-    stackoverflow_tool = None
+stack_exchange_tool = StackExchangeTool(api_wrapper=StackExchangeAPIWrapper())
+stackoverflow_tool = LangchainTool(stack_exchange_tool)
 
 # Toolbox for JIRA operations
 TOOLBOX_URL = os.getenv("MCP_TOOLBOX_URL", "http://127.0.0.1:5000")
@@ -182,12 +177,6 @@ except Exception as e:
 # ----- Specialized Agent Tools -----
 
 # 1. Analysis Agent Tool
-analysis_tools = [search_tool, get_current_date]
-if stackoverflow_tool:
-    analysis_tools.append(stackoverflow_tool)
-if mcp_tools_analyse:
-    analysis_tools.append(mcp_tools_analyse)
-
 analysis_agent = Agent(
     model="gemini-2.5-flash",
     name="code_analysis_agent",
@@ -216,13 +205,11 @@ analysis_agent = Agent(
     
     Always provide detailed, actionable analysis.
     """,
-    tools=analysis_tools,
+    tools=[search_tool, stackoverflow_tool, mcp_tools_analyse, get_current_date],
 )
 analysis_agent_tool = AgentTool(analysis_agent)
 
 # 2. JIRA Agent Tool
-jira_tools = toolbox_tools + [get_current_date]
-
 jira_agent = Agent(
     model="gemini-2.5-flash",
     name="jira_management_agent",
@@ -249,17 +236,11 @@ jira_agent = Agent(
     
     Handle errors gracefully and provide meaningful feedback if JIRA operations fail.
     """,
-    tools=jira_tools,
+    tools=toolbox_tools + [get_current_date],
 )
 jira_agent_tool = AgentTool(jira_agent)
 
 # 3. Code Fixer Agent Tool
-fixer_tools = [get_current_date]
-if mcp_tools_pr:
-    fixer_tools.append(mcp_tools_pr)
-if mcp_tools_analyse:
-    fixer_tools.append(mcp_tools_analyse)
-
 code_fixer_agent = Agent(
     model="gemini-2.5-flash",
     name="code_fixer_agent",
@@ -291,6 +272,6 @@ code_fixer_agent = Agent(
     IMPORTANT: The system has been patched to handle AnyUrl serialization issues.
     If you encounter any JSON serialization errors with GitHub operations, they should be automatically handled.
     """,
-    tools=fixer_tools,
+    tools=[mcp_tools_pr, mcp_tools_analyse, get_current_date],
 )
 code_fixer_agent_tool = AgentTool(code_fixer_agent)
