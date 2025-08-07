@@ -24,4 +24,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8080
 
 # Run adk web by default, can also run api_server if you choose
-ENTRYPOINT ["uv", "run", "adk", "web", "--host", "0.0.0.0", "--port", "8080"]
+ENTRYPOINT ["sh", "-c", "uv run adk web --host 0.0.0.0 --port 8080 ${SESSION_SERVICE_URI:+--session_service_uri $SESSION_SERVICE_URI}"]
