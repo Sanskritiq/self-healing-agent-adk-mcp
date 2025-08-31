@@ -1,0 +1,326 @@
+sources:
+  postgresql: # GCP -  CLOUD SQL
+    kind: cloud-sql-postgres
+    project: linear-theater-463712-r8
+    region: us-central1
+    instance: software-assistant
+    database: tickets-db
+    user: postgres
+    password: admin
+  # postgresql: # LOCAL
+  #   kind: postgres
+  #   host: 127.0.0.1
+  #   port: 5432
+  #   database: ticketsdb
+  #   user: postgres
+  #   password: admin
+
+tools:
+  search-tickets:
+    kind: postgres-sql
+    source: postgresql
+    description: Search for similar tickets based on their descriptions.
+    parameters:
+      - name: query
+        type: string
+        description: The query to perform vector search with.
+    statement: |
+      SELECT ticket_id, title, description, assignee, priority, status, (embedding <=> embedding('text-embedding-005', $1)::vector) as distance
+      FROM tickets
+      ORDER BY distance ASC
+      LIMIT 3;
+  get-ticket-by-id:
+    kind: postgres-sql
+    source: postgresql
+    description: Retrieve a ticket's details using its unique ID.
+    parameters:
+      - name: ticket_id
+        type: string
+        description: The unique ID of the ticket.
+    statement: SELECT * FROM tickets WHERE ticket_id = $1;
+  get-tickets-by-assignee:
+    kind: postgres-sql
+    source: postgresql
+    description: Search for tickets based on assignee (email).
+    parameters:
+      - name: assignee
+        type: string
+        description: The email of the assignee.
+    statement: SELECT * FROM tickets WHERE assignee ILIKE '%' || $1 || '%';
+  update-ticket-priority:
+    kind: postgres-sql
+    source: postgresql
+    description: Update the priority of a ticket based on its ID.
+    parameters:
+      - name: priority
+        type: string
+        description: The priority of the ticket. Can be one of 'P0 - Critical', 'P1 - High', 'P2 - Medium', or 'P3 - Low'.
+      - name: ticket_id
+        type: string
+        description: The ID of the ticket.
+    statement: UPDATE tickets SET priority = $1 WHERE ticket_id = $2;
+  update-ticket-status:
+    kind: postgres-sql
+    source: postgresql
+    description: Update the status of a ticket based on its ID.
+    parameters:
+      - name: status
+        type: string
+        description: The new status of the ticket (e.g., 'Open', 'In Progress', 'Closed', 'Resolved').
+      - name: ticket_id
+        type: string
+        description: The ID of the ticket.
+    statement: UPDATE tickets SET status = $1 WHERE ticket_id = $2;
+
+  update-ticket-description:
+    kind: postgres-sql
+    source: postgresql
+    description: Update the description of a ticket based on its ID.
+    parameters:
+      - name: description
+        type: string
+        description: The new description for the ticket.
+      - name: ticket_id
+        type: string
+        description: The ID of the ticket to update.
+    statement: UPDATE tickets SET description = $1 WHERE ticket_id = $2 RETURNING ticket_id;
+
+  add-pr-to-ticket:
+    kind: postgres-sql
+    source: postgresql
+    description: Add a pull request link to a ticket. Handles both new PR links and appending to existing ones.
+    parameters:
+      - name: ticket_id
+        type: string
+        description: The ID of the ticket to update.
+      - name: pr_url
+        type: string
+        description: The pull request URL to add.
+      - name: pr_title
+        type: string
+        description: The title of the pull request.
+    statement: |
+      UPDATE tickets 
+      SET 
+        pr_links = CASE 
+          WHEN pr_links IS NULL OR pr_links = '' THEN $2
+          ELSE pr_links || E'\n' || $2
+        END,
+        description = CASE 
+          WHEN description NOT LIKE '%Pull Request:%' 
+          THEN description || E'\n\n**Pull Request:** [' || $3 || '](' || $2 || ')'
+          ELSE description
+        END,
+        updated_time = CURRENT_TIMESTAMP
+      WHERE ticket_id = $1
+      RETURNING ticket_id, CONCAT('TICKET-', ticket_id) as ticket_key, pr_links;
+
+  get-tickets-by-status:
+    kind: postgres-sql
+    source: postgresql
+    description: Search for tickets based on their current status.
+    parameters:
+      - name: status
+        type: string
+        description: The status of the tickets to retrieve (e.g., 'Open', 'In Progress', 'Closed', 'Resolved').
+    statement: |
+      SELECT 
+        ticket_id,
+        CONCAT('TICKET-', ticket_id) as ticket_key,
+        title,
+        description,
+        assignee,
+        priority,
+        status,
+        creation_time,
+        updated_time
+      FROM tickets 
+      WHERE status ILIKE '%' || $1 || '%'
+      ORDER BY 
+        CASE priority 
+          WHEN 'P0 - Critical' THEN 1 
+          WHEN 'P1 - High' THEN 2 
+          WHEN 'P2 - Medium' THEN 3 
+          WHEN 'P3 - Low' THEN 4 
+        END,
+        creation_time DESC;
+
+  get-tickets-by-priority:
+    kind: postgres-sql
+    source: postgresql
+    description: Search for tickets based on their priority.
+    parameters:
+      - name: priority
+        type: string
+        description: The priority of the tickets to retrieve (e.g., 'P0 - Critical', 'P1 - High', 'P2 - Medium', 'P3 - Low').
+    statement: |
+      SELECT 
+        ticket_id,
+        CONCAT('TICKET-', ticket_id) as ticket_key,
+        title,
+        description,
+        assignee,
+        priority,
+        status,
+        creation_time,
+        updated_time
+      FROM tickets 
+      WHERE priority ILIKE '%' || $1 || '%'
+      ORDER BY creation_time DESC;
+
+  create-new-ticket:
+    kind: postgres-sql
+    source: postgresql
+    description: Create a new software ticket.
+    parameters:
+      - name: title
+        type: string
+        description: The title of the new ticket.
+      - name: description
+        type: string
+        description: A detailed description of the bug or issue.
+      - name: assignee
+        type: string
+        description: (Optional) The email of the person to whom the ticket should be assigned.
+      - name: priority
+        type: string
+        description: (Optional) The priority of the ticket. Can be 'P0 - Critical', 'P1 - High', 'P2 - Medium', or 'P3 - Low'. Default is 'P3 - Low'.
+      - name: status
+        type: string
+        description: (Optional) The initial status of the ticket. Default is 'Open'.
+    statement: INSERT INTO tickets (title, description, assignee, priority, status) VALUES ($1, $2, $3, COALESCE($4, 'P3 - Low'), COALESCE($5, 'Open')) RETURNING ticket_id;
+
+  get-tickets-by-date-range:
+    kind: postgres-sql
+    source: postgresql
+    description: Retrieve tickets created or updated within a specific date range.
+    parameters:
+      - name: start_date
+        type: string
+        description: The start date (inclusive) for the range (e.g., 'YYYY-MM-DD').
+      - name: end_date
+        type: string
+        description: The end date (inclusive) for the range (e.g., 'YYYY-MM-DD').
+      - name: date_field
+        type: string
+        description: The date field to filter by ('creation_time' or 'updated_time').
+    statement: |
+      SELECT 
+        ticket_id,
+        CONCAT('TICKET-', ticket_id) as ticket_key,
+        title,
+        description,
+        assignee,
+        priority,
+        status,
+        creation_time,
+        updated_time
+      FROM tickets 
+      WHERE CASE 
+        WHEN $3 = 'creation_time' THEN creation_time 
+        ELSE updated_time 
+      END BETWEEN $1::timestamp AND $2::timestamp
+      ORDER BY 
+        CASE priority 
+          WHEN 'P0 - Critical' THEN 1 
+          WHEN 'P1 - High' THEN 2 
+          WHEN 'P2 - Medium' THEN 3 
+          WHEN 'P3 - Low' THEN 4 
+        END,
+        creation_time DESC;
+
+  get-open-tickets-summary:
+    kind: postgres-sql
+    source: postgresql
+    description: Get a summary of open tickets by priority and assignee.
+    parameters: []
+    statement: |
+      SELECT 
+        priority,
+        assignee,
+        COUNT(*) as ticket_count,
+        STRING_AGG(CONCAT('TICKET-', ticket_id, ': ', title), E'\n' ORDER BY creation_time DESC) as tickets
+      FROM tickets 
+      WHERE status NOT IN ('Closed', 'Resolved')
+      GROUP BY priority, assignee
+      ORDER BY 
+        CASE priority 
+          WHEN 'P0 - Critical' THEN 1 
+          WHEN 'P1 - High' THEN 2 
+          WHEN 'P2 - Medium' THEN 3 
+          WHEN 'P3 - Low' THEN 4 
+        END,
+        assignee;
+
+  update-ticket-with-comment:
+    kind: postgres-sql
+    source: postgresql
+    description: Add a comment or update to a ticket by appending to the description with timestamp.
+    parameters:
+      - name: ticket_id
+        type: string
+        description: The ID of the ticket to update.
+      - name: comment
+        type: string
+        description: The comment or update to add.
+      - name: author
+        type: string
+        description: (Optional) The author of the comment.
+    statement: |
+      UPDATE tickets 
+      SET 
+        description = description || E'\n\n---\n**Update (' || CURRENT_TIMESTAMP::date || ')' || 
+          CASE WHEN $3 IS NOT NULL THEN ' by ' || $3 ELSE '' END || ':**\n' || $2,
+        updated_time = CURRENT_TIMESTAMP
+      WHERE ticket_id = $1
+      RETURNING ticket_id, CONCAT('TICKET-', ticket_id) as ticket_key, title;
+
+  search-tickets-by-text:
+    kind: postgres-sql
+    source: postgresql
+    description: Search tickets by text in title or description using full-text search.
+    parameters:
+      - name: search_text
+        type: string
+        description: The text to search for in ticket titles and descriptions.
+    statement: |
+      SELECT 
+        ticket_id,
+        CONCAT('TICKET-', ticket_id) as ticket_key,
+        title,
+        description,
+        assignee,
+        priority,
+        status,
+        creation_time,
+        updated_time
+      FROM tickets 
+      WHERE 
+        title ILIKE '%' || $1 || '%' OR 
+        description ILIKE '%' || $1 || '%'
+      ORDER BY 
+        CASE priority 
+          WHEN 'P0 - Critical' THEN 1 
+          WHEN 'P1 - High' THEN 2 
+          WHEN 'P2 - Medium' THEN 3 
+          WHEN 'P3 - Low' THEN 4 
+        END,
+        creation_time DESC
+      LIMIT 10;
+
+toolsets:
+  tickets_toolset:
+    - search-tickets
+    - get-ticket-by-id
+    - get-tickets-by-assignee
+    - get-tickets-by-status
+    - get-tickets-by-priority
+    - get-tickets-by-date-range
+    - update-ticket-priority
+    - update-ticket-status
+    - update-ticket-description
+    - add-pr-to-ticket
+    - create-new-ticket
+    - get-open-tickets-summary
+    - update-ticket-with-comment
+    - search-tickets-by-text
