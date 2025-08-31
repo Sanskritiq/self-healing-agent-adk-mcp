@@ -152,7 +152,7 @@ gcloud run deploy self-healing-agent-chat \
 
 ## 🎥 Demo Workflow
 
-Below is an example end-to-end flow of how the **Self-Healing Agent** operates in production:
+Below is an example end-to-end flow of how the **Self-Healing Agent** operates in production - [Demo](https://drive.google.com/file/d/1k_X93PtFfk9QJh_9bpKX7QYCzjLF4ux9/view?usp=sharing):
 
 1. **Error Detected**
     - An error occurs in a GKE application (e.g., service crash, stack trace in logs).
@@ -190,4 +190,5 @@ Below is an example end-to-end flow of how the **Self-Healing Agent** operates i
             
 7. **Human Oversight (Optional)**
     - Maintainers can review and merge the PR.
+
         
