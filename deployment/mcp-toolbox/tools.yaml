@@ -1,7 +1,7 @@
 sources:
   postgresql: # GCP -  CLOUD SQL
     kind: cloud-sql-postgres
-    project: linear-theater-463712-r8
+    project: generative-ai-471808
     region: us-central1
     instance: software-assistant
     database: tickets-db
